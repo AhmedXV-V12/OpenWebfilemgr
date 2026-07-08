@@ -1,11 +1,11 @@
-# OpenWebfilemgr <img src="https://github.com/user-attachments/assets/439c4ef8-e9a7-476c-8a87-f96b0f6a78ad" width="48" height="48" align="center" alt="logo" />
+# OpenWebfilemgr <img src="https://github.com/user-attachments/assets/439c4ef8-e9a7-476c-8a87-f96b0f6a78ad" width="50" height="50" align="center" alt="logo" />
 
 ## What is OpenWebfilemgr?
 * An open-source, lightweight web-based file manager.
 * Designed to run efficiently on low-end hardware and resource-constrained devices.
 
 ## Installation
-You can download and run the interactive installer script using either `curl` or `wget`.
+You can download and run the interactive installer script using `curl`
 
 ### Option 1: Using curl
 ```bash
