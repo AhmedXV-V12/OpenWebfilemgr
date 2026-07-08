@@ -1,1 +1,2 @@
-# OpenWebfilemgr
+logo[logo.png]
+## OpenWebfilemgr
