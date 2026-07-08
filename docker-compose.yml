@@ -1,0 +1,10 @@
+services:
+  openwebfilemgr:
+    build: .
+    container_name: openwebfilemgr
+    ports:
+      - "7000:7000"
+    volumes:
+      - ./storage:/app/storage
+      - ./config.json:/app/config.json
+    restart: unless-stopped

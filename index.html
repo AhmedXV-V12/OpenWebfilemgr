@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OpenWebfilemgr</title>
+{% if style_path %}<link rel="stylesheet" href="/user-style">{% endif %}
+</head>
+<body>
+
+{% if page == "login" %}
+<img src="/logo.png" alt="OpenWebfilemgr" class="logo">
+<h2>OpenWebfilemgr Login</h2>
+<form id="loginForm">
+<label>Name</label><br>
+<input type="text" id="name" required><br><br>
+<label>Password</label><br>
+<input type="password" id="password" required><br><br>
+{% if make_account %}
+<label>Root Path (only for new account)</label><br>
+<input type="text" id="root_path"><br><br>
+<button type="button" onclick="doAction('login')">Login</button>
+<button type="button" onclick="doAction('register')">Create Account</button>
+{% else %}
+<button type="button" onclick="doAction('login')">Login</button>
+{% endif %}
+</form>
+<p id="msg"></p>
+
+<script>
+function doAction(action){
+  var name = document.getElementById('name').value;
+  var password = document.getElementById('password').value;
+  var root_path = document.getElementById('root_path') ? document.getElementById('root_path').value : '';
+  var url = action === 'register' ? '/api/register' : '/api/login';
+  fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name: name, password: password, root_path: root_path})
+  }).then(r => r.json()).then(d => {
+    if(d.ok){ window.location.href = '/files'; }
+    else { document.getElementById('msg').innerText = d.error || 'failed'; }
+  });
+}
+</script>
+
+{% elif page == "files" %}
+<img src="/logo.png" alt="OpenWebfilemgr" class="logo">
+<h2>OpenWebfilemgr</h2>
+<div id="pathBar"><span id="pathLabel"></span></div>
+<div>
+<button onclick="goUp()">Up</button>
+<button onclick="logout()">Logout</button>
+</div>
+<div>
+<input type="text" id="newFolderName" placeholder="new folder name">
+<button onclick="createFolder()">New Folder</button>
+<input type="text" id="newFileName" placeholder="new file name">
+<button onclick="createFile()">New File</button>
+<input type="file" id="uploadInput">
+<button onclick="uploadFile()">Upload</button>
+<span id="uploadStatus"></span>
+</div>
+<table border="1" id="fileTable">
+<thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th><th>Actions</th></tr></thead>
+<tbody id="fileList"></tbody>
+</table>
+<div id="viewer"></div>
+
+<script>
+var currentPath = new URLSearchParams(window.location.search).get('q') || '';
+
+function apiList(path){
+  return fetch('/api/list?path=' + encodeURIComponent(path)).then(r => r.json());
+}
+
+function updateUrl(){
+  var url = new URL(window.location.href);
+  if(currentPath){ url.searchParams.set('q', currentPath); }
+  else { url.searchParams.delete('q'); }
+  window.history.replaceState({}, '', url);
+}
+
+function renderBreadcrumb(){
+  var label = document.getElementById('pathLabel');
+  label.innerHTML = '';
+  var rootLink = document.createElement('a');
+  rootLink.href = '#';
+  rootLink.innerText = '/';
+  rootLink.onclick = function(){ currentPath = ''; updateUrl(); refresh(); return false; };
+  label.appendChild(rootLink);
+  if(!currentPath) return;
+  var parts = currentPath.split('/');
+  var acc = '';
+  parts.forEach(function(p, i){
+    acc = acc ? acc + '/' + p : p;
+    var link = document.createElement('a');
+    link.href = '#';
+    link.innerText = p;
+    var target = acc;
+    link.onclick = function(){ currentPath = target; updateUrl(); refresh(); return false; };
+    label.appendChild(link);
+    if(i < parts.length - 1){
+      label.appendChild(document.createTextNode('/'));
+    }
+  });
+}
+
+function refresh(){
+  apiList(currentPath).then(d => {
+    if(!d.ok){ alert(d.error); return; }
+    renderBreadcrumb();
+    updateUrl();
+    var tbody = document.getElementById('fileList');
+    tbody.innerHTML = '';
+    d.entries.forEach(function(e){
+      var tr = document.createElement('tr');
+      var nameTd = document.createElement('td');
+      var a = document.createElement('a');
+      a.href = '#';
+      a.innerText = e.name;
+      if(e.is_dir){
+        a.onclick = function(){ currentPath = e.rel_path; updateUrl(); refresh(); return false; };
+      } else {
+        a.onclick = function(){ openFile(e.rel_path, e.kind); return false; };
+      }
+      nameTd.appendChild(a);
+      tr.appendChild(nameTd);
+
+      var typeTd = document.createElement('td');
+      typeTd.innerText = e.is_dir ? 'folder' : e.kind;
+      tr.appendChild(typeTd);
+
+      var sizeTd = document.createElement('td');
+      sizeTd.innerText = e.is_dir ? '' : e.size;
+      tr.appendChild(sizeTd);
+
+      var modTd = document.createElement('td');
+      modTd.innerText = e.modified;
+      tr.appendChild(modTd);
+
+      var actTd = document.createElement('td');
+      var delBtn = document.createElement('button');
+      delBtn.innerText = 'Delete';
+      delBtn.onclick = function(){ deleteEntry(e.rel_path); };
+      actTd.appendChild(delBtn);
+      if(!e.is_dir){
+        var dlBtn = document.createElement('button');
+        dlBtn.innerText = 'Download';
+        dlBtn.onclick = function(){ window.location.href = '/api/raw?path=' + encodeURIComponent(e.rel_path) + '&download=1'; };
+        actTd.appendChild(dlBtn);
+      }
+      tr.appendChild(actTd);
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+function goUp(){
+  if(!currentPath) return;
+  var parts = currentPath.split('/');
+  parts.pop();
+  currentPath = parts.join('/');
+  updateUrl();
+  refresh();
+}
+
+var openedFile = null;
+
+function openFile(rel_path, kind){
+  var viewer = document.getElementById('viewer');
+  if(openedFile === rel_path){
+    viewer.innerHTML = '';
+    openedFile = null;
+    return;
+  }
+  openedFile = rel_path;
+  viewer.innerHTML = '<p id="loadingMsg">loading...</p>';
+  if(kind === 'image'){
+    var img = document.createElement('img');
+    img.style.maxWidth = '100%';
+    img.style.display = 'none';
+    img.onload = function(){ var m=document.getElementById('loadingMsg'); if(m) m.remove(); img.style.display=''; };
+    img.onerror = function(){ var m=document.getElementById('loadingMsg'); if(m) m.innerText='failed to load image'; };
+    img.src = '/api/raw?path=' + encodeURIComponent(rel_path);
+    viewer.appendChild(img);
+  } else if(kind === 'video'){
+    var vid = document.createElement('video');
+    vid.controls = true;
+    vid.style.maxWidth = '100%';
+    vid.style.display = 'none';
+    vid.oncanplay = function(){ var m=document.getElementById('loadingMsg'); if(m) m.remove(); vid.style.display=''; };
+    vid.onerror = function(){ var m=document.getElementById('loadingMsg'); if(m) m.innerText='failed to load video'; };
+    vid.src = '/api/raw?path=' + encodeURIComponent(rel_path);
+    viewer.appendChild(vid);
+  } else if(kind === 'text'){
+    fetch('/api/text?path=' + encodeURIComponent(rel_path)).then(r => r.json()).then(d => {
+      viewer.innerHTML = '';
+      if(!d.ok){ alert(d.error); return; }
+      var ta = document.createElement('textarea');
+      ta.id = 'editArea';
+      ta.rows = 20;
+      ta.cols = 80;
+      ta.value = d.content;
+      viewer.appendChild(ta);
+      var saveBtn = document.createElement('button');
+      saveBtn.innerText = 'Save';
+      saveBtn.onclick = function(){ saveText(rel_path); };
+      viewer.appendChild(saveBtn);
+    });
+  } else {
+    viewer.innerHTML = '';
+    var a = document.createElement('a');
+    a.href = '/api/raw?path=' + encodeURIComponent(rel_path) + '&download=1';
+    a.innerText = 'Download file';
+    viewer.appendChild(a);
+  }
+}
+
+function saveText(rel_path){
+  var content = document.getElementById('editArea').value;
+  fetch('/api/text', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: rel_path, content: content})
+  }).then(r => r.json()).then(d => {
+    if(!d.ok){ alert(d.error); }
+  });
+}
+
+function createFolder(){
+  var name = document.getElementById('newFolderName').value;
+  if(!name) return;
+  fetch('/api/mkdir', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: currentPath, name: name})
+  }).then(r => r.json()).then(d => {
+    if(!d.ok){ alert(d.error); }
+    document.getElementById('newFolderName').value = '';
+    refresh();
+  });
+}
+
+function createFile(){
+  var name = document.getElementById('newFileName').value;
+  if(!name) return;
+  fetch('/api/mkfile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: currentPath, name: name})
+  }).then(r => r.json()).then(d => {
+    if(!d.ok){ alert(d.error); }
+    document.getElementById('newFileName').value = '';
+    refresh();
+  });
+}
+
+function deleteEntry(rel_path){
+  if(!confirm('Delete ' + rel_path + '?')) return;
+  fetch('/api/delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({path: rel_path})
+  }).then(r => r.json()).then(d => {
+    if(!d.ok){ alert(d.error); }
+    refresh();
+  });
+}
+
+function uploadFile(){
+  var input = document.getElementById('uploadInput');
+  if(!input.files.length){ alert('no file selected'); return; }
+  var file = input.files[0];
+  var status = document.getElementById('uploadStatus');
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('path', currentPath);
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload', true);
+  status.innerText = 'uploading 0%';
+  xhr.upload.onprogress = function(e){
+    if(e.lengthComputable){
+      var pct = Math.round((e.loaded / e.total) * 100);
+      status.innerText = 'uploading ' + pct + '%';
+    }
+  };
+  xhr.onload = function(){
+    var d;
+    try { d = JSON.parse(xhr.responseText); } catch(err){ d = {ok:false, error:'bad response ' + xhr.status}; }
+    if(!d.ok){ status.innerText = 'failed: ' + d.error; return; }
+    status.innerText = 'uploaded: ' + file.name;
+    input.value = '';
+    refresh();
+    setTimeout(function(){ status.innerText = ''; }, 3000);
+  };
+  xhr.onerror = function(){ status.innerText = 'network error during upload'; };
+  xhr.send(fd);
+}
+
+function logout(){
+  fetch('/api/logout', {method:'POST'}).then(() => { window.location.href = '/'; });
+}
+
+refresh();
+</script>
+{% endif %}
+
+</body>
+</html>
