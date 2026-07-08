@@ -44,7 +44,6 @@ else
     echo "Skipping app.py"
 fi
 
-# بناء حاوية دوقر
 read -p "Build docker image now? (y/N): " build_choice
 if [[ "$build_choice" =~ ^[Yy]$ ]]; then
     echo "Building docker image..."
