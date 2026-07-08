@@ -7,7 +7,7 @@
 ## Installation
 You can download and run the interactive installer script using `curl`
 
-### Option 1: Using curl
+### install by curl
 ```bash
 curl -L https://github.com/AhmedXV-V12/OpenWebfilemgr/archive/refs/heads/main.tar.gz | tar -xz && cd OpenWebfilemgr-main && chmod +x build.sh && ./build.sh
 
