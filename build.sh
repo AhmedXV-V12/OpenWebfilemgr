@@ -48,6 +48,13 @@ read -p "Build docker image now? (y/N): " build_choice
 if [[ "$build_choice" =~ ^[Yy]$ ]]; then
     echo "Building docker image..."
     docker compose build
+    read -p "Start OpenWebfilemgr now? (y/N): " start_choice
+    if [[ "$start_choice" =~ ^[Yy]$ ]]; then
+        docker compose up -d
+        sleep 3
+        echo "If you left the password empty, a new one was generated:"
+        docker compose logs openwebfilemgr | grep -i "password" || true
+    fi
 else
     echo "Installation finished without building."
 fi

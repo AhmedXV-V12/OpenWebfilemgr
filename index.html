@@ -2,26 +2,41 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OpenWebfilemgr</title>
 {% if style_path %}<link rel="stylesheet" href="/user-style">{% endif %}
 </head>
 <body>
 
+<script>
+function api(url, body){
+  var opts = {headers: {'X-OWFM-Request': '1'}, credentials: 'same-origin'};
+  if(body !== undefined){
+    opts.method = 'POST';
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  return fetch(url, opts).then(function(r){
+    if(r.status === 401 && url.indexOf('/api/login') !== 0 && url.indexOf('/api/register') !== 0){
+      window.location.href = '/';
+      return new Promise(function(){});
+    }
+    return r.json().catch(function(){ return {ok: false, error: 'bad response ' + r.status}; });
+  }, function(){ return {ok: false, error: 'network error'}; });
+}
+</script>
+
 {% if page == "login" %}
 <img src="/logo.png" alt="OpenWebfilemgr" class="logo">
 <h2>OpenWebfilemgr Login</h2>
-<form id="loginForm">
+<form id="loginForm" onsubmit="doAction('login'); return false;">
 <label>Name</label><br>
-<input type="text" id="name" required><br><br>
+<input type="text" id="name" autocomplete="username" required><br><br>
 <label>Password</label><br>
-<input type="password" id="password" required><br><br>
-{% if make_account %}
-<label>Root Path (only for new account)</label><br>
-<input type="text" id="root_path"><br><br>
-<button type="button" onclick="doAction('login')">Login</button>
+<input type="password" id="password" autocomplete="current-password" required><br><br>
+<button type="submit">Login</button>
+{% if make_account and allow_registration %}
 <button type="button" onclick="doAction('register')">Create Account</button>
-{% else %}
-<button type="button" onclick="doAction('login')">Login</button>
 {% endif %}
 </form>
 <p id="msg"></p>
@@ -30,13 +45,8 @@
 function doAction(action){
   var name = document.getElementById('name').value;
   var password = document.getElementById('password').value;
-  var root_path = document.getElementById('root_path') ? document.getElementById('root_path').value : '';
   var url = action === 'register' ? '/api/register' : '/api/login';
-  fetch(url, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({name: name, password: password, root_path: root_path})
-  }).then(r => r.json()).then(d => {
+  api(url, {name: name, password: password}).then(function(d){
     if(d.ok){ window.location.href = '/files'; }
     else { document.getElementById('msg').innerText = d.error || 'failed'; }
   });
@@ -56,7 +66,7 @@ function doAction(action){
 <button onclick="createFolder()">New Folder</button>
 <input type="text" id="newFileName" placeholder="new file name">
 <button onclick="createFile()">New File</button>
-<input type="file" id="uploadInput">
+<input type="file" id="uploadInput" multiple>
 <button onclick="uploadFile()">Upload</button>
 <span id="uploadStatus"></span>
 </div>
@@ -70,7 +80,7 @@ function doAction(action){
 var currentPath = new URLSearchParams(window.location.search).get('q') || '';
 
 function apiList(path){
-  return fetch('/api/list?path=' + encodeURIComponent(path)).then(r => r.json());
+  return api('/api/list?path=' + encodeURIComponent(path));
 }
 
 function updateUrl(){
@@ -107,7 +117,10 @@ function renderBreadcrumb(){
 
 function refresh(){
   apiList(currentPath).then(d => {
-    if(!d.ok){ alert(d.error); return; }
+    if(!d.ok){
+      if(currentPath){ currentPath = ''; updateUrl(); refresh(); return; }
+      alert(d.error); return;
+    }
     renderBreadcrumb();
     updateUrl();
     var tbody = document.getElementById('fileList');
@@ -166,11 +179,23 @@ function goUp(){
 
 var openedFile = null;
 
+function closeViewer(){
+  document.getElementById('viewer').innerHTML = '';
+  openedFile = null;
+}
+
+function getLoopPref(){
+  try { return localStorage.getItem('owfm_video_loop') === '1'; } catch(err){ return false; }
+}
+
+function setLoopPref(on){
+  try { localStorage.setItem('owfm_video_loop', on ? '1' : '0'); } catch(err){}
+}
+
 function openFile(rel_path, kind){
   var viewer = document.getElementById('viewer');
   if(openedFile === rel_path){
-    viewer.innerHTML = '';
-    openedFile = null;
+    closeViewer();
     return;
   }
   openedFile = rel_path;
@@ -186,25 +211,46 @@ function openFile(rel_path, kind){
   } else if(kind === 'video'){
     var vid = document.createElement('video');
     vid.controls = true;
+    vid.loop = getLoopPref();
     vid.style.maxWidth = '100%';
     vid.style.display = 'none';
     vid.oncanplay = function(){ var m=document.getElementById('loadingMsg'); if(m) m.remove(); vid.style.display=''; };
     vid.onerror = function(){ var m=document.getElementById('loadingMsg'); if(m) m.innerText='failed to load video'; };
     vid.src = '/api/raw?path=' + encodeURIComponent(rel_path);
     viewer.appendChild(vid);
+
+    var controls = document.createElement('div');
+    var loopBtn = document.createElement('button');
+    loopBtn.id = 'loopBtn';
+    var paintLoop = function(){
+      loopBtn.innerText = 'Loop: ' + (vid.loop ? 'On' : 'Off');
+      loopBtn.setAttribute('aria-pressed', vid.loop ? 'true' : 'false');
+    };
+    loopBtn.onclick = function(){ vid.loop = !vid.loop; setLoopPref(vid.loop); paintLoop(); };
+    paintLoop();
+    controls.appendChild(loopBtn);
+    viewer.appendChild(controls);
   } else if(kind === 'text'){
-    fetch('/api/text?path=' + encodeURIComponent(rel_path)).then(r => r.json()).then(d => {
+    api('/api/text?path=' + encodeURIComponent(rel_path)).then(d => {
       viewer.innerHTML = '';
-      if(!d.ok){ alert(d.error); return; }
+      if(!d.ok){ alert(d.error); openedFile = null; return; }
+      var crlf = d.content.indexOf('\r\n') !== -1;
       var ta = document.createElement('textarea');
       ta.id = 'editArea';
       ta.rows = 20;
       ta.cols = 80;
       ta.value = d.content;
       viewer.appendChild(ta);
+      if(d.read_only){
+        ta.readOnly = true;
+        var note = document.createElement('p');
+        note.innerText = 'not a UTF-8 text file, opened read-only';
+        viewer.appendChild(note);
+        return;
+      }
       var saveBtn = document.createElement('button');
       saveBtn.innerText = 'Save';
-      saveBtn.onclick = function(){ saveText(rel_path); };
+      saveBtn.onclick = function(){ saveText(rel_path, crlf); };
       viewer.appendChild(saveBtn);
     });
   } else {
@@ -216,13 +262,10 @@ function openFile(rel_path, kind){
   }
 }
 
-function saveText(rel_path){
+function saveText(rel_path, crlf){
   var content = document.getElementById('editArea').value;
-  fetch('/api/text', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: rel_path, content: content})
-  }).then(r => r.json()).then(d => {
+  if(crlf){ content = content.replace(/\r?\n/g, '\r\n'); }
+  api('/api/text', {path: rel_path, content: content}).then(d => {
     if(!d.ok){ alert(d.error); }
   });
 }
@@ -230,11 +273,7 @@ function saveText(rel_path){
 function createFolder(){
   var name = document.getElementById('newFolderName').value;
   if(!name) return;
-  fetch('/api/mkdir', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: currentPath, name: name})
-  }).then(r => r.json()).then(d => {
+  api('/api/mkdir', {path: currentPath, name: name}).then(d => {
     if(!d.ok){ alert(d.error); }
     document.getElementById('newFolderName').value = '';
     refresh();
@@ -244,11 +283,7 @@ function createFolder(){
 function createFile(){
   var name = document.getElementById('newFileName').value;
   if(!name) return;
-  fetch('/api/mkfile', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: currentPath, name: name})
-  }).then(r => r.json()).then(d => {
+  api('/api/mkfile', {path: currentPath, name: name}).then(d => {
     if(!d.ok){ alert(d.error); }
     document.getElementById('newFileName').value = '';
     refresh();
@@ -257,54 +292,100 @@ function createFile(){
 
 function deleteEntry(rel_path){
   if(!confirm('Delete ' + rel_path + '?')) return;
-  fetch('/api/delete', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: rel_path})
-  }).then(r => r.json()).then(d => {
+  api('/api/delete', {path: rel_path}).then(d => {
     if(!d.ok){ alert(d.error); }
+    if(openedFile && (openedFile === rel_path || openedFile.indexOf(rel_path + '/') === 0)){ closeViewer(); }
     refresh();
   });
 }
 
-function uploadFile(){
+var uploadCfg = null;
+var uploading = false;
+
+function randomId(){
+  var bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, function(b){ return b.toString(16).padStart(2, '0'); }).join('');
+}
+
+function sendChunk(uploadId, index, blob, onProgress){
+  return new Promise(function(resolve){
+    var fd = new FormData();
+    fd.append('upload_id', uploadId);
+    fd.append('chunk_index', index);
+    fd.append('chunk', blob, 'chunk');
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload_chunk', true);
+    xhr.setRequestHeader('X-OWFM-Request', '1');
+    xhr.upload.onprogress = function(e){ if(e.lengthComputable) onProgress(e.loaded); };
+    xhr.onload = function(){
+      if(xhr.status === 401){ window.location.href = '/'; return; }
+      var d;
+      try { d = JSON.parse(xhr.responseText); } catch(err){ d = {ok: false, error: 'bad response ' + xhr.status, retry: xhr.status >= 500}; }
+      resolve(d);
+    };
+    xhr.onerror = function(){ resolve({ok: false, error: 'network error during upload', retry: true}); };
+    xhr.send(fd);
+  });
+}
+
+async function uploadOne(file, path, status, label){
+  if(file.size > uploadCfg.max_file_size){ return {ok: false, error: 'file exceeds max allowed size'}; }
+  var uploadId = randomId();
+  var size = uploadCfg.chunk_size;
+  var total = Math.max(1, Math.ceil(file.size / size));
+  for(let i = 0; i < total; i++){
+    var blob = file.slice(i * size, Math.min(file.size, (i + 1) * size));
+    var d, tries = 0;
+    do {
+      d = await sendChunk(uploadId, i, blob, function(loaded){
+        status.innerText = label + ' ' + Math.round((i * size + loaded) / Math.max(file.size, 1) * 100) + '%';
+      });
+      tries++;
+    } while(!d.ok && d.retry && tries < 3);
+    if(!d.ok){ api('/api/upload_cancel', {upload_id: uploadId}); return d; }
+  }
+  return api('/api/upload_finish', {upload_id: uploadId, path: path, filename: file.name, total_chunks: total});
+}
+
+async function uploadFile(){
+  if(uploading) return;
   var input = document.getElementById('uploadInput');
   if(!input.files.length){ alert('no file selected'); return; }
-  var file = input.files[0];
+  var files = Array.from(input.files);
+  var path = currentPath;
   var status = document.getElementById('uploadStatus');
-  var fd = new FormData();
-  fd.append('file', file);
-  fd.append('path', currentPath);
-
-  var xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/upload', true);
-  status.innerText = 'uploading 0%';
-  xhr.upload.onprogress = function(e){
-    if(e.lengthComputable){
-      var pct = Math.round((e.loaded / e.total) * 100);
-      status.innerText = 'uploading ' + pct + '%';
+  uploading = true;
+  try {
+    if(!uploadCfg){
+      var c = await api('/api/upload_config');
+      if(!c.ok){ status.innerText = 'failed: ' + c.error; return; }
+      uploadCfg = c;
     }
-  };
-  xhr.onload = function(){
-    var d;
-    try { d = JSON.parse(xhr.responseText); } catch(err){ d = {ok:false, error:'bad response ' + xhr.status}; }
-    if(!d.ok){ status.innerText = 'failed: ' + d.error; return; }
-    status.innerText = 'uploaded: ' + file.name;
+    for(let k = 0; k < files.length; k++){
+      var label = 'uploading ' + (files.length > 1 ? '(' + (k + 1) + '/' + files.length + ') ' : '') + files[k].name;
+      status.innerText = label + ' 0%';
+      var d = await uploadOne(files[k], path, status, label);
+      if(!d.ok){ status.innerText = 'failed: ' + files[k].name + ': ' + d.error; refresh(); return; }
+    }
+    status.innerText = 'uploaded: ' + (files.length === 1 ? files[0].name : files.length + ' files');
     input.value = '';
     refresh();
     setTimeout(function(){ status.innerText = ''; }, 3000);
-  };
-  xhr.onerror = function(){ status.innerText = 'network error during upload'; };
-  xhr.send(fd);
+  } finally {
+    uploading = false;
+  }
 }
 
 function logout(){
-  fetch('/api/logout', {method:'POST'}).then(() => { window.location.href = '/'; });
+  api('/api/logout', {}).then(() => { window.location.href = '/'; });
 }
 
 refresh();
 </script>
 {% endif %}
+
+<p id="version">OpenWebfilemgr {{ version }}</p>
 
 </body>
 </html>
